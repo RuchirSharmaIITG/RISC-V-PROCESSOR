@@ -82,7 +82,7 @@ module hazard_unit (
             stall_if = 1'b1; // Freeze fetch
             stall_id = 1'b1; // Freeze decode
             stall_ex = 1'b1; // Freeze EX so the instruction holds steady
-            flush_ex = 1'b1; // Push bubble to EX/MEM so bad memory writes aren't done every long cycle
+            flush_ex = 1'b1; // Push bubble to EX/MEM so side-effects aren't replayed
         end
 
         // --- Control Hazard Logic ---
@@ -97,3 +97,4 @@ module hazard_unit (
     end
 
 endmodule
+
