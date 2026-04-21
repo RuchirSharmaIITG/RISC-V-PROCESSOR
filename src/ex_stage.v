@@ -13,6 +13,7 @@ module ex_stage (
     input  wire        immediate_sel_i,
     input  wire        alu_i,
     input  wire        lui_i,
+    input  wire        auipc_i,   // RV32I AUIPC: result = pc + (imm20 << 12)
     input  wire        jal_i,
     input  wire        jalr_i,
     input  wire        branch_i,
@@ -21,9 +22,18 @@ module ex_stage (
     // RV32M logic
     input  wire        mult_div_en_i,
     
+    // RV32F logic / General Instruction Selectors
+    input  wire [4:0]  rs2_sel_i, // Extracted rs2 field from instruction
+    input  wire        fp_en_i,
+    input  wire        fp_load_i,
+    input  wire        fp_store_i,
+    input  wire [4:0]  fp_funct5_i,
+    input  wire [31:0] fp_rdata1_i,
+    input  wire [31:0] fp_rdata2_i,
+    
     // CSR logic
     input  wire        is_csr_i,
-    input  wire [11:0] csr_addr_i,
+    input  wire [11:0] csr_addr_i, // Connected to CSR address decoding logic
     input  wire [31:0] csr_rdata_i, // From global CSR file
 
     // Forwarding logic
@@ -38,6 +48,7 @@ module ex_stage (
     output reg         branch_taken,
     output reg  [31:0] branch_target,
     output wire        stall_ex_request, // Stalls earlier stages because Math takes longer
+    output wire        ex_exception,     // Triggered on traps like div-by-zero
     
     // CSR Outputs
     output reg         csr_we,
@@ -51,6 +62,8 @@ module ex_stage (
     // ----------------------------------------------------
     reg [31:0] fw_operand1;
     reg [31:0] fw_operand2;
+    reg [31:0] fp_fw_operand1;
+    reg [31:0] fp_fw_operand2;
 
     always @(*) begin
         case (forward_a)
@@ -66,9 +79,25 @@ module ex_stage (
             2'b10: fw_operand2 = forward_ex_mem_val;
             default: fw_operand2 = reg_rdata2_i;
         endcase
+        
+        // Similar forwarding approach for FP registers
+        case (forward_a)
+            2'b00: fp_fw_operand1 = fp_rdata1_i;
+            2'b01: fp_fw_operand1 = forward_mem_wb_val;
+            2'b10: fp_fw_operand1 = forward_ex_mem_val;
+            default: fp_fw_operand1 = fp_rdata1_i;
+        endcase
+
+        case (forward_b)
+            2'b00: fp_fw_operand2 = fp_rdata2_i;
+            2'b01: fp_fw_operand2 = forward_mem_wb_val;
+            2'b10: fp_fw_operand2 = forward_ex_mem_val;
+            default: fp_fw_operand2 = fp_rdata2_i;
+        endcase
     end
 
-    assign write_data_out = fw_operand2;
+    // Use fp_fw_operand2 for write data during an FP Store
+    assign write_data_out = fp_store_i ? fp_fw_operand2 : fw_operand2;
 
     wire [31:0] alu_operand1 = fw_operand1;
     wire [31:0] alu_operand2 = immediate_sel_i ? immediate_i : fw_operand2;
@@ -79,6 +108,7 @@ module ex_stage (
     wire [31:0] mult_div_result_val;
     wire        mult_div_ready;
     wire        mult_div_busy;
+    wire        mult_div_zero_fault;
     
     // Fire the module immediately when entering EX with mult_div op, unless it's already busy
     wire        mult_div_start = mult_div_en_i && !mult_div_busy && !mult_div_ready;
@@ -92,11 +122,36 @@ module ex_stage (
         .op       (alu_op_i),
         .result   (mult_div_result_val),
         .ready    (mult_div_ready),
-        .busy     (mult_div_busy)
+        .busy     (mult_div_busy),
+        .div_zero_fault (mult_div_zero_fault)
     );
 
+    // ----------------------------------------------------
+    // FPU Setup
+    // ----------------------------------------------------
+    wire [31:0] fpu_result_val;
+    wire        stall_fpu;
+    wire        fpu_zero_fault;
+    
+    fpu u_fpu (
+        .clk            (clk),
+        .reset          (reset),
+        .a              (fp_fw_operand1),
+        .b              (fp_fw_operand2),
+        .funct5         (fp_funct5_i),
+        .funct3         (alu_op_i),
+        .rs2_sel        (rs2_sel_i),
+        .fp_en          (fp_en_i),
+        .result         (fpu_result_val),
+        .stall_fpu      (stall_fpu),
+        .fpu_exception  (fpu_zero_fault)
+    );
+
+    // Combine trap sources, mapped tightly to the active math execute enable flag
+    assign ex_exception = (mult_div_en_i & mult_div_zero_fault) | (fp_en_i & fpu_zero_fault);
+
     // Hazard Unit freezes pipeline if we need to wait
-    assign stall_ex_request = mult_div_en_i && !mult_div_ready;
+    assign stall_ex_request = (mult_div_en_i && !mult_div_ready) || stall_fpu;
 
     // ----------------------------------------------------
     // Calculate next PC / branch
@@ -111,7 +166,15 @@ module ex_stage (
         end
         else if (jalr_i) begin
             branch_taken  = 1'b1;
-            branch_target = (alu_operand1 + immediate_i) & ~32'd1;
+            
+            // Catch the hijacked MRET instruction!
+            // Normal JALR doesn't assert is_csr, so this combination uniquely identifies MRET.
+            if (is_csr_i) begin
+                branch_target = csr_rdata_i; // Jump to the value held in MEPC!
+            end else begin
+                branch_target = (alu_operand1 + immediate_i) & ~32'd1; // Normal JALR
+            end
+            
         end
         else if (branch_i) begin
             branch_target = pc_i + immediate_i;
@@ -172,8 +235,18 @@ module ex_stage (
         else if (lui_i) begin
             ex_result = immediate_i;
         end
+        else if (auipc_i) begin
+            // AUIPC is PC-relative. Without this case the default
+            // `alu_operand1 + immediate_i` computed `x0 + imm`, which broke
+            // every PC-relative address the compiler generated (string
+            // pointers, global data, trap-vector setup, etc.).
+            ex_result = pc_i + immediate_i;
+        end
         else if (is_csr_i) begin
             ex_result = csr_rdata_i; // Output old CSR value to rd
+        end
+        else if (fp_en_i) begin
+            ex_result = fpu_result_val; // RV32F ALu result
         end
         else if (mult_div_en_i) begin
             ex_result = mult_div_result_val; // RV32M result
@@ -192,7 +265,7 @@ module ex_stage (
             endcase
         end
         else begin
-            // LOAD or STORE addresses
+            // LOAD or STORE addresses (even for FP, the base address is integer register)
             ex_result = alu_operand1 + immediate_i;
         end
     end
