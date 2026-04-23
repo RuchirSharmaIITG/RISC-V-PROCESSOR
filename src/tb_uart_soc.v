@@ -1,173 +1,235 @@
 `timescale 1ns / 1ps
 
-module tb_uart_soc;
-    reg clk;
-    reg reset;
+module uart #(
+    parameter CLK_FREQ = 100_000_000, // 100 MHz default
+    parameter BAUD_RATE = 115200
+)(
+    input  wire       clk,
+    input  wire       reset,
 
-    reg  uart_rx;
-    wire uart_tx; 
-    wire [15:0] led;
+    // UART Physical pins
+    input  wire       rx,
+    output reg        tx,
 
-    // Swift Baud Rate (100MHz / 3.125M = 32 clocks per bit, perfect divisor for '16' oversampling)
-    top_fpga #(
-        .BAUD_RATE(3125000)
-    ) dut (
+    // TX Interface
+    input  wire [7:0] tx_data,
+    input  wire       tx_start,
+    output wire       tx_full,
+
+    // RX Interface
+    output reg  [7:0] rx_data,
+    output reg        rx_ready,
+    input  wire       rx_ack     // Strobe high to clear rx_ready after reading
+);
+
+    // ----------------------------------------------------
+    // Baud Rate Generator Parameters
+    // ----------------------------------------------------
+    localparam CLOCKS_PER_BIT  = CLK_FREQ / BAUD_RATE;
+    localparam OVERSAMPLE      = 16;
+    localparam CLOCKS_PER_TICK = CLK_FREQ / (BAUD_RATE * OVERSAMPLE);
+
+    // ----------------------------------------------------
+    // TX FSM
+    // ----------------------------------------------------
+    localparam TX_IDLE  = 2'b00;
+    localparam TX_START = 2'b01;
+    localparam TX_DATA  = 2'b10;
+    localparam TX_STOP  = 2'b11;
+
+    reg [1:0]  tx_state;
+    reg [31:0] tx_timer;
+    reg [2:0]  tx_bit_idx;
+    reg [7:0]  tx_shift_reg;
+
+    // FIFO Interface Wires
+    wire [7:0] fifo_read_data;
+    wire       fifo_empty;
+    reg        fifo_read_en;
+
+    uart_tx_fifo #(
+        .DATA_WIDTH(8),
+        .DEPTH(1024)
+    ) tx_fifo (
         .clk(clk),
         .reset(reset),
-        .uart_rx(uart_rx),
-        .uart_tx(uart_tx),
-        .led(led)
+        .write_data(tx_data),
+        .write_en(tx_start),
+        .full(tx_full),
+        .read_data(fifo_read_data),
+        .read_en(fifo_read_en),
+        .empty(fifo_empty)
     );
 
-    always #5 clk = ~clk; // 100 MHz clock
+    always @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            tx_state     <= TX_IDLE;
+            tx_timer     <= 0;
+            tx_bit_idx   <= 0;
+            tx_shift_reg <= 0;
+            tx           <= 1'b1;
+            fifo_read_en <= 1'b0;
+        end else begin
+            // Default: do not read from FIFO unless we decide to this cycle
+            fifo_read_en <= 1'b0;
+            
+            case (tx_state)
+                TX_IDLE: begin
+                    tx <= 1'b1; // Drive line high when idle
+                    tx_timer <= 0;
+                    tx_bit_idx <= 0;
+                    if (!fifo_empty) begin
+                        tx_shift_reg <= fifo_read_data;
+                        fifo_read_en <= 1'b1; // Pop exactly one item
+                        tx_state     <= TX_START;
+                    end
+                end
+                
+                TX_START: begin
+                    tx <= 1'b0; // Drive low for Start bit
+                    if (tx_timer == CLOCKS_PER_BIT - 1) begin
+                        tx_timer <= 0;
+                        tx_state <= TX_DATA;
+                    end else begin
+                        tx_timer <= tx_timer + 1;
+                    end
+                end
+                
+                TX_DATA: begin
+                    tx <= tx_shift_reg[tx_bit_idx]; // LSB first
+                    if (tx_timer == CLOCKS_PER_BIT - 1) begin
+                        tx_timer <= 0;
+                        if (tx_bit_idx == 7) begin
+                            tx_bit_idx <= 0;
+                            tx_state   <= TX_STOP;
+                        end else begin
+                            tx_bit_idx <= tx_bit_idx + 1;
+                        end
+                    end else begin
+                        tx_timer <= tx_timer + 1;
+                    end
+                end
+                
+                TX_STOP: begin
+                    tx <= 1'b1; // Drive high for Stop bit
+                    if (tx_timer == CLOCKS_PER_BIT - 1) begin
+                        tx_timer <= 0;
+                        tx_state <= TX_IDLE;
+                    end else begin
+                        tx_timer <= tx_timer + 1;
+                    end
+                end
+            endcase
+        end
+    end
 
-    localparam CLKS_PER_BIT = 32;
+    // ----------------------------------------------------
+    // RX FSM (16x Oversampling)
+    // ----------------------------------------------------
+    localparam RX_IDLE  = 2'b00;
+    localparam RX_START = 2'b01;
+    localparam RX_DATA  = 2'b10;
+    localparam RX_STOP  = 2'b11;
+
+    reg [1:0]  rx_state;
+    reg [31:0] rx_tick_timer;
+    reg [3:0]  rx_ticks;
+    reg [2:0]  rx_bit_idx;
+    reg [7:0]  rx_shift_reg;
     
-    // UART TX Task (to send data simulating python script)
-    task send_byte(input [7:0] data);
-        integer i;
-        begin
-            uart_rx = 0; // Start bit
-            #(CLKS_PER_BIT * 10);
-            
-            for (i=0; i<8; i=i+1) begin
-                uart_rx = data[i]; // Data bits
-                #(CLKS_PER_BIT * 10);
-            end
-            
-            uart_rx = 1; // Stop bit
-            #(CLKS_PER_BIT * 10);
-        end
-    endtask
-
-    // UART RX Task (to receive data from FPGA)
-    reg [7:0] rx_catch;
-    task receive_byte;
-        integer i;
-        begin
-            @(negedge uart_tx); // Wait for start bit
-            #(CLKS_PER_BIT * 10 / 2); // Wait to center
-            #(CLKS_PER_BIT * 10);
-            for (i=0; i<8; i=i+1) begin
-                rx_catch[i] = uart_tx;
-                #(CLKS_PER_BIT * 10);
-            end
-            #(CLKS_PER_BIT * 10); // Wait out stop bit
-            $write("%c", rx_catch); // Print to console!
-        end
-    endtask
-
-    initial begin
-        clk = 0;
-        reset = 0;
-        uart_rx = 1;
-        
-        $dumpfile("tb_uart_soc.vcd");
-        $dumpvars(0, tb_uart_soc);
-        
-        #15 reset = 1;
-
-        // Give the bootloader a moment to reset
-        #500;
-        
-        $display("[SIM] Sending DEADBEEF Header...");
-        send_byte(8'hDE); send_byte(8'hAD); send_byte(8'hBE); send_byte(8'hEF);
-        
-        // Dynamically find size of program.bin!
-        begin : load_bin
-            integer fd;
-            integer size;
-            integer byte;
-            fd = $fopen("c_toolchain/program.bin", "rb");
-            if (fd == 0) begin
-                $display("ERROR: Could not open program.bin!");
-                $finish;
-            end
-            
-            // Just assume around 5000 bytes maximum, we dynamically read until EOF over 2 passes
-            // Wait, we can't easily find size in pure Verilog 2001. Let's just send a massive padded size or precalculate it.
-            // Oh right, we can count the bytes first!
-            size = 0;
-            while (!$feof(fd)) begin
-                byte = $fgetc(fd);
-                if (byte != -1) size = size + 1;
-            end
-            
-            while ((size % 4) != 0) size = size + 1;
-            
-            $display("[SIM] Found program.bin size: %0d bytes", size);
-            
-            // Send size (Little Endian)
-            send_byte(size & 8'hFF);
-            send_byte((size >> 8) & 8'hFF);
-            send_byte((size >> 16) & 8'hFF);
-            send_byte((size >> 24) & 8'hFF);
-            
-            // Send payload
-            $fclose(fd);
-            fd = $fopen("c_toolchain/program.bin", "rb");
-            while (size > 0) begin
-                byte = $fgetc(fd);
-                if (byte == -1) send_byte(8'h00);
-                else send_byte(byte[7:0]);
-                size = size - 1;
-            end
-            $fclose(fd);
-        end
-        
-        $display("[SIM] Binary transmitted. Waiting for Bootloader to release CPU...");
-        
-        wait (dut.cpu_reset == 1'b1);
-        $display("[SIM] CPU BOOTED AND EXECUTING!");
-        
-        #200000; 
-        
-        $display("\n[SIM] Sending formula: add 15.5 24.5");
-        send_byte("a"); send_byte("d"); send_byte("d"); send_byte(" ");
-        send_byte("1"); send_byte("5"); send_byte("."); send_byte("5"); send_byte(" ");
-        send_byte("2"); send_byte("4"); send_byte("."); send_byte("5"); send_byte("\r");
-        
-        #100000;
-        
-        $display("\n[SIM] Sending formula: div 5 0");
-        send_byte("d"); send_byte("i"); send_byte("v"); send_byte(" ");
-        send_byte("5"); send_byte(" ");
-        send_byte("0"); send_byte("\r");
-        
-        #500000;
-        
-        $finish;
-    end
-
-    // Monitor CPU reset and boot loader writes
-    always @(posedge dut.cpu_reset) begin
-        $display("============ CPU BOOTLOADER FINISHED, CORE IS RELEASED ============");
-    end
-
-    integer pc_limit = 0;
-    always @(posedge clk) begin
-        if (dut.boot_we)
-            if (dut.boot_addr[12:0] < 12) $display("[BOOT] Writing Mem[%0h] = %08h", dut.boot_addr, dut.boot_wdata);
-            
-        if (dut.cpu_reset == 1'b1 && pc_limit < 10) begin
-            $display("[CPU] PC = %08h, Inst = %08h", dut.pipe_u.if_pc_out, dut.inst_mem_read_data);
-            pc_limit = pc_limit + 1;
+    // Double-flop synchronizer to prevent metastability on asynchronous RX input
+    reg rx_sync1, rx_sync2;
+    always @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            rx_sync1 <= 1'b1;
+            rx_sync2 <= 1'b1;
+        end else begin
+            rx_sync1 <= rx;
+            rx_sync2 <= rx_sync1;
         end
     end
 
-    initial begin
-        // UART RX thread
-        #100;
-        forever begin
-            receive_byte();
+    always @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            rx_state      <= RX_IDLE;
+            rx_tick_timer <= 0;
+            rx_ticks      <= 0;
+            rx_bit_idx    <= 0;
+            rx_shift_reg  <= 0;
+            rx_data       <= 0;
+            rx_ready      <= 1'b0;
+        end else begin
+            // Handshake logic: Clear the ready flag when the pipeline acknowledges reading
+            if (rx_ack) begin
+                rx_ready <= 1'b0;
+            end
+            
+            // Generate ticks precisely at OVERSAMPLE rate (e.g., 16 ticks per bit)
+            if (rx_tick_timer == CLOCKS_PER_TICK - 1) begin
+                rx_tick_timer <= 0;
+                
+                case (rx_state)
+                    RX_IDLE: begin
+                        rx_ticks   <= 0;
+                        rx_bit_idx <= 0;
+                        // Falling edge detected (Start bit candidate)
+                        if (rx_sync2 == 1'b0) begin 
+                            rx_state <= RX_START;
+                        end
+                    end
+                    
+                    RX_START: begin
+                        if (rx_ticks == 7) begin // Sample precisely in the middle of the start bit
+                            if (rx_sync2 == 1'b0) begin // Verify it's a real start bit
+                                rx_ticks <= 0;
+                                rx_state <= RX_DATA;
+                            end else begin
+                                rx_state <= RX_IDLE; // Glitch detected, abort
+                            end
+                        end else begin
+                            rx_ticks <= rx_ticks + 1;
+                        end
+                    end
+                    
+                    RX_DATA: begin
+                        if (rx_ticks == 15) begin // Sample in the middle of subsequent bits (16 ticks later)
+                            rx_ticks <= 0;
+                            // Shift in LSB first
+                            rx_shift_reg <= {rx_sync2, rx_shift_reg[7:1]};
+                            if (rx_bit_idx == 7) begin
+                                rx_state <= RX_STOP;
+                            end else begin
+                                rx_bit_idx <= rx_bit_idx + 1;
+                            end
+                        end else begin
+                            rx_ticks <= rx_ticks + 1;
+                        end
+                    end
+                    
+                    RX_STOP: begin
+                        if (rx_ticks == 15) begin // Sample middle of the stop bit
+                            rx_ticks <= 0;
+                            rx_state <= RX_IDLE;
+                            // Verify stop bit is High (valid stop)
+                            if (rx_sync2 == 1'b1) begin 
+                                rx_data  <= rx_shift_reg;
+                                rx_ready <= 1'b1; // Assert ready mapping to pipeline register full
+                            end
+                        end else begin
+                            rx_ticks <= rx_ticks + 1;
+                        end
+                    end
+                endcase
+                
+            end else begin
+                // Turn on the tick timer if we're parsing RX or if we see a candidate start edge
+                if (rx_state != RX_IDLE || rx_sync2 == 1'b0) begin
+                    rx_tick_timer <= rx_tick_timer + 1;
+                end else begin
+                    rx_tick_timer <= 0; // Hold at 0 whilst line is idle (keeps start-edge aligned!)
+                end
+            end
         end
-    end
-
-    // Failsafe Timeout
-    initial begin
-        #50_000_000;
-        $display("\n[SIM FAIL] Test Timeout Occurred.");
-        $finish;
     end
 
 endmodule
