@@ -273,9 +273,9 @@ module pipe #(
         .csr_waddr        (wb_csr_addr),
         .csr_wdata        (wb_csr_wdata),
         
-        // Fix: Use the generic ex_exception wire to trigger Cause 24 (Div-by-Zero)
+        // Use standardised RISC-V cause (2 = Illegal Instruction) for remaining FPU faults
         .exception_trigger(ex_exception),
-        .exception_cause  (ex_exception ? 32'd24 : 32'b0), 
+        .exception_cause  (ex_exception ? 32'd2 : 32'b0), 
         .exception_pc     (ex_pc),
         .exception_vector (exception_vector)
     );
