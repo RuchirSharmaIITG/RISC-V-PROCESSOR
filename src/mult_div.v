@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
 
+
 module mult_div (
     input  wire        clk,
     input  wire        reset,
@@ -61,16 +62,16 @@ module mult_div (
     wire [31:0] div_sub_val = div_upper - divisor;
     
     // Multiply step logic
-    wire [32:0] mult_step_sum = {1'b0, accumulator[63:32]} + {1'b0, divisor};
+    wire [32:0] mult_step_sum =  {1'b0, accumulator[63:32]} + {1'b0, divisor};
     
     // Output formatting logic
     wire [63:0] mult_final_acc = out_sign ? (~accumulator + 1) : accumulator;
     wire [31:0] mult_final_out = is_upper_mult ? mult_final_acc[63:32] : mult_final_acc[31:0];
     
-    wire [31:0] div_quo_raw = accumulator[31:0];
-    wire [31:0] div_mod_raw = accumulator[63:32];
-    wire [31:0] div_quo_out = out_sign ? (~div_quo_raw + 1) : div_quo_raw;
-    wire [31:0] div_mod_out = rem_sign ? (~div_mod_raw + 1) : div_mod_raw;
+    wire [31:0] div_quo_raw =  accumulator[31:0];
+    wire [31:0] div_mod_raw =  accumulator[63:32];
+    wire [31:0] div_quo_out =  out_sign ? (~div_quo_raw + 1) : div_quo_raw;
+    wire [31:0] div_mod_out =  rem_sign ? (~div_mod_raw + 1) : div_mod_raw;
 
     // -----------------------------------------------------------------
     // Sequential State Machine
@@ -95,7 +96,7 @@ module mult_div (
                         
                         if (!is_div) begin
                             // Multiplication Setup
-                            state <= STATE_MULT;
+                            state <=  STATE_MULT;
                             
                             if (op == 3'b001) begin // MULH (signed x signed)
                                 out_sign    <= mult_sign_ss;
@@ -113,30 +114,30 @@ module mult_div (
                         end
                         else begin
                             // Division Setup
-                            state <= STATE_DIV;
+                            state <=  STATE_DIV;
                             
                             if (is_signed_div) begin
-                                out_sign <= div_sign_quo;
-                                rem_sign <= div_sign_rem;
+                                out_sign <=  div_sign_quo;
+                                rem_sign <=  div_sign_rem;
                                 
                                 if (rs2_data == 0) begin
                                     // Divide by zero fault
-                                    div_zero_fault <= 1'b1;
-                                    result <= is_rem ? rs1_data : 32'hFFFF_FFFF;
-                                    state  <= STATE_DONE;
+                                    div_zero_fault <=  1'b1;
+                                    result <= is_rem ?  rs1_data : 32'hFFFF_FFFF;
+                                    state  <=  STATE_DONE;
                                 end else begin
-                                    accumulator <= {32'h0, abs_rs1};
-                                    divisor     <= abs_rs2;
+                                    accumulator <=  {32'h0, abs_rs1};
+                                    divisor     <=  abs_rs2;
                                 end
                             end else begin
-                                out_sign <= 1'b0;
-                                rem_sign <= 1'b0;
+                                out_sign <=  1'b0;
+                                rem_sign <=  1'b0;
                                 
                                 if (rs2_data == 0) begin
                                     // Divide by zero fault
-                                    div_zero_fault <= 1'b1;
-                                    result <= is_rem ? rs1_data : 32'hFFFF_FFFF;
-                                    state  <= STATE_DONE;
+                                    div_zero_fault <=  1'b1;
+                                    result <= is_rem ?  rs1_data : 32'hFFFF_FFFF;
+                                    state  <=  STATE_DONE;
                                 end else begin
                                     accumulator <= {32'h0, rs1_data};
                                     divisor     <= rs2_data;
@@ -145,6 +146,8 @@ module mult_div (
                         end
                     end
                 end
+
+
                 
                 STATE_MULT: begin
                     // Shift and Add
@@ -162,11 +165,13 @@ module mult_div (
                         state  <= STATE_DONE;
                     end
                 end
+
+
                 
                 STATE_DIV: begin
-                    // Restoring Division Algorithm
+                    // Restoring Division Algorithm optimized
                     if (counter > 0) begin
-                        if (div_sub_ok) begin
+                        if ( div_sub_ok ) begin
                             accumulator <= { div_sub_val, div_shifted[31:1], 1'b1 };
                         end else begin
                             accumulator <= { div_upper, div_shifted[31:1], 1'b0 };
@@ -175,17 +180,23 @@ module mult_div (
                     end
                     else begin
                         // Finalize result using pre-calculated combinatorial output
-                        result <= is_rem ? div_mod_out : div_quo_out;
-                        state  <= STATE_DONE;
+                        result <= is_rem ? div_mod_out :  div_quo_out;
+                        state  <=  STATE_DONE;
                     end
                 end
                 
+
+
                 STATE_DONE: begin
-                    if (start) state <= STATE_DONE; // Stay here while start is high
-                    else state <= STATE_IDLE;      // Only return to idle when start is dropped
+                    if ( start ) state <= STATE_DONE; // Stay here while start is high
+                    else state <=  STATE_IDLE;      // Only return to idle when start is dropped
                 end
+
+
             endcase
         end
     end
+
+
 
 endmodule
