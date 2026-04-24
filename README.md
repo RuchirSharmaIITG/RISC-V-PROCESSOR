@@ -12,14 +12,14 @@ A complete, synthesizable 5-stage pipelined RISC-V System-on-Chip built in Veril
 │                                                                     │
 │  ┌──────────────┐    ┌────────────────────────────────────────────┐ │
 │  │  Bootloader  │    │             pipeline.v (CPU)               │ │
-│  │  (UART RX)   │───▶│  IF → ID → EX → MEM → WB  (Hazard Unit)  │ │
+│  │  (UART RX)   │ -> │  IF → ID → EX → MEM → WB  (Hazard Unit)    │ |
 │  └──────────────┘    └──────────────────┬─────────────────────────┘ │
-│                                         │ Load/Store                 │
+│                                         │ Load/Store                │
 │  ┌──────────────┐    ┌──────────────────▼──────────────────────────┐│
 │  │   UART TX    │    │              Address Decoder                ││
-│  │  (0x8000...) │    │  0x0... → BRAM  │  0x4... → CORDIC (AXI)  ││
-│  └──────────────┘    │  0x8... → UART  │  0x5... → Systolic (AXI)││
-│                       └─────────────────────────────────────────────┘│
+│  │  (0x8000...) │    │  0x0... → BRAM  │  0x4... → CORDIC (AXI)    ││
+│  └──────────────┘    │  0x8... → UART  │  0x5... → Systolic (AXI)  ││
+│                      └─────────────────────────────────────────────┘│
 │                                                                     │
 │  ┌──────────────────────┐   ┌──────────────────────────────────────┐│
 │  │  axi_cordic_slave    │   │       axi_systolic_4x4               ││
