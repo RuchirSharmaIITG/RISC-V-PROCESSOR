@@ -32,11 +32,12 @@ module csr_file (
 
     assign exception_vector = mtvec;
 
-    // CSR Read
+    // CSR Read (Combinational)
     always @(*) begin
         case (csr_raddr)
             MSTATUS: csr_rdata = mstatus;
-            MISA:    csr_rdata = 32'h40000100; // RV32, no extensions configured for stringency (I base only shown)
+            // 0x40001120 = RV32 (Bit 30=1), plus I (Bit 8=1), M (Bit 12=1), F (Bit 5=1)
+            MISA:    csr_rdata = 32'h40001120; 
             MTVEC:   csr_rdata = mtvec;
             MEPC:    csr_rdata = mepc;
             MCAUSE:  csr_rdata = mcause;
@@ -44,7 +45,7 @@ module csr_file (
         endcase
     end
 
-    // CSR Write & Exception Trapping
+    // CSR Write & Exception Trapping (Sequential)
     always @(posedge clk or negedge reset) begin
         if (!reset) begin
             mstatus <= 32'h0;
@@ -53,16 +54,18 @@ module csr_file (
             mcause  <= 32'h0;
         end
         else begin
+            // Hardware Exception takes highest priority
             if (exception_trigger) begin
                 mepc    <= exception_pc;
                 mcause  <= exception_cause;
                 // typically disable interrupts in mstatus here
             end
+            // Software Write takes secondary priority
             else if (csr_we) begin
                 case (csr_waddr)
                     MSTATUS: mstatus <= csr_wdata;
                     MTVEC:   mtvec   <= csr_wdata;
-                    MEPC:    mepc    <= csr_wdata;
+                    MEPC:    mepc    <= csr_wdata; // ALLOWS SOFTWARE TO ADVANCE PC!
                     MCAUSE:  mcause  <= csr_wdata;
                 endcase
             end
