@@ -74,15 +74,20 @@ module top_fpga #(
 	// MEMORY MAPPED I/O (UART) at 0x8000_0000
     // AXI4-Lite Master at 0x4000_0000
 	////////////////////////////////////////////////////////////
-    // Intercept RAM accesses if address starts with 8 (0x8000...)
-    wire is_uart_addr  = (dmem_read_address[31:28] == 4'h8) || (dmem_write_address[31:28] == 4'h8);
-    // Intercept accesses for AXI4-Lite if address starts with 4 (0x4000...)
-    wire is_cordic_addr   = (dmem_read_address[31:28] == 4'h4) || (dmem_write_address[31:28] == 4'h4);
-    // Intercept accesses for Systolic Array if address starts with 5 (0x5000...)
-    wire is_systolic_addr = (dmem_read_address[31:28] == 4'h5) || (dmem_write_address[31:28] == 4'h5);
+    // Decode read and write addresses INDEPENDENTLY to avoid cross-talk.
+    // e.g. a UART write at 0x8... must never assert a CORDIC read flag.
+    wire is_uart_read     = (dmem_read_address[31:28]  == 4'h8);
+    wire is_uart_write    = (dmem_write_address[31:28] == 4'h8);
+    wire is_cordic_read   = (dmem_read_address[31:28]  == 4'h4);
+    wire is_cordic_write  = (dmem_write_address[31:28] == 4'h4);
+    wire is_systolic_read = (dmem_read_address[31:28]  == 4'h5);
+    wire is_systolic_write= (dmem_write_address[31:28] == 4'h5);
 
-    wire uart_we       = is_uart_addr && dmem_write_ready;
-    wire uart_re       = is_uart_addr && dmem_read_ready;
+    // Convenience aliases used in a few legacy spots below
+   
+
+    wire uart_we       = is_uart_write && dmem_write_ready;
+    wire uart_re       = is_uart_read  && dmem_read_ready;
     
     // UART hardware wires
     wire [7:0] uart_rx_data;
@@ -103,9 +108,11 @@ module top_fpga #(
     
     always @(posedge cpu_clk) begin
         // Carry the UART/AXI-read state into the Write-Back stage cycle
-        is_uart_read_r <= uart_re;
-        is_cordic_read_r  <= is_cordic_addr && dmem_read_ready;
-        is_systolic_read_r <= is_systolic_addr && dmem_read_ready;
+        is_uart_read_r     <= uart_re;
+        // Use ONLY the read-side address signal so a concurrent write to a
+        // different peripheral never sets these flags.
+        is_cordic_read_r   <= is_cordic_read  && dmem_read_ready;
+        is_systolic_read_r <= is_systolic_read && dmem_read_ready;
         
         // Sample the UART Hardware wires dynamically exactly when a Read is requested
         if (uart_re) begin
@@ -171,10 +178,14 @@ module top_fpga #(
     
     axi4_lite_master axi_master_inst (
         .clk           (cpu_clk),
-        .reset         (reset), // Active low reset standard
-        .req_enable    (is_cordic_addr && (dmem_read_ready || dmem_write_ready)),
-        .req_write     (dmem_write_ready),
-        .req_addr      (dmem_write_ready ? dmem_write_address : dmem_read_address),
+        .reset         (cpu_reset),
+        // req_enable fires when either a read or write to the CORDIC space is valid
+        .req_enable    ((is_cordic_read && dmem_read_ready) || (is_cordic_write && dmem_write_ready)),
+        // req_write: purely driven by the write path flag
+        .req_write     (is_cordic_write && dmem_write_ready),
+        // Address: use write address when writing, read address when reading.
+        // CRITICAL: only use write_address when ACTUALLY writing, not just when dmem_write_ready
+        .req_addr      (is_cordic_write && dmem_write_ready ? dmem_write_address : dmem_read_address),
         .req_wdata     (dmem_write_data),
         .req_wstrb     (dmem_write_byte),
         .axi_busy      (cordic_busy),
@@ -204,7 +215,7 @@ module top_fpga #(
     // Instantiate the CORDIC Logic directly inside the Top Level!
     axi_cordic_slave HW_CORDIC (
         .clk          (cpu_clk),
-        .reset        (reset),
+        .reset        (cpu_reset),
         .s_axi_awaddr (m_axi_awaddr),
         .s_axi_awprot (m_axi_awprot),
         .s_axi_awvalid(m_axi_awvalid),
@@ -254,10 +265,13 @@ module top_fpga #(
     // Second Master dedicated to the Systolic array bounds
     axi4_lite_master axi_master_systolic_inst (
         .clk           (cpu_clk),
-        .reset         (reset),
-        .req_enable    (is_systolic_addr && (dmem_read_ready || dmem_write_ready)),
-        .req_write     (dmem_write_ready),
-        .req_addr      (dmem_write_ready ? dmem_write_address : dmem_read_address),
+        .reset         (cpu_reset),
+        // req_enable fires when either a read or write to the Systolic space is valid
+        .req_enable    ((is_systolic_read && dmem_read_ready) || (is_systolic_write && dmem_write_ready)),
+        // req_write: purely driven by the write path flag
+        .req_write     (is_systolic_write && dmem_write_ready),
+        // Address: use write address when writing, read address when reading.
+        .req_addr      (is_systolic_write && dmem_write_ready ? dmem_write_address : dmem_read_address),
         .req_wdata     (dmem_write_data),
         .req_wstrb     (dmem_write_byte),
         .axi_busy      (systolic_busy),
@@ -279,7 +293,7 @@ module top_fpga #(
     // Instantiate the 4x4 Systolic Array mapped perfectly to the sub-bus!
     axi_systolic_4x4 HW_SYSTOLIC (
         .clk(cpu_clk),
-        .reset(reset),
+        .reset(cpu_reset),
         .s_axi_awaddr (sys_awaddr),  .s_axi_awprot (sys_awprot),
         .s_axi_awvalid(sys_awvalid), .s_axi_awready(sys_awready),
         .s_axi_wdata  (sys_wdata),   .s_axi_wstrb  (sys_wstrb),
@@ -292,13 +306,17 @@ module top_fpga #(
         .s_axi_rready (sys_rready)
     );
 
+
 	////////////////////////////////////////////////////////////
 	// PIPELINE CPU
 	////////////////////////////////////////////////////////////
+
 	pipe pipe_u (
 		.clk               (cpu_clk), // Driven direct from top port clk
 		.reset             (cpu_reset),
-		.stall             (cordic_busy || systolic_busy), // Freezes CPU cleanly when AXI peripheral is active
+        // The newly updated AXI Masters natively assert combinatorial immediate busy signals!
+        .stall (cordic_busy || systolic_busy),
+
 		.exception         (exception),
 		.pc_out            (current_pc), 
 		.inst_mem_address  (inst_mem_address),
@@ -341,14 +359,18 @@ module top_fpga #(
     // via $readmemh and the CPU reads garbage for every string / constant.
     // The CPU is held in reset while boot_we pulses, so the two producers of
     // these write signals are mutually exclusive.
-    wire bram_we           = boot_we || (dmem_write_ready && !is_uart_addr && !is_cordic_addr && !is_systolic_addr);
+    // Use ONLY the write-side signals for the BRAM write-enable.
+    // This ensures that a CORDIC read happening in the same cycle doesn't disable BRAM writes.
+    wire bram_we           = boot_we || (dmem_write_ready && !is_uart_write && !is_cordic_write && !is_systolic_write);
     wire [31:0] bram_waddr = boot_we ? boot_addr  : dmem_write_address;
     wire [31:0] bram_wdata = boot_we ? boot_wdata : dmem_write_data;
     wire [3:0]  bram_wstrb = boot_we ? 4'b1111    : dmem_write_byte;
 
 	data_mem DMEM (
-		.clk   (cpu_clk), // DMEM stays at 50MHz to match pipeline
-		.re    (dmem_read_ready && !is_uart_addr && !is_cordic_addr && !is_systolic_addr), 
+		.clk   (cpu_clk), 
+        // Use ONLY the read-side signals for the BRAM read-enable.
+        // This ensures that a UART write happening in the same cycle doesn't disable BRAM reads.
+		.re    (dmem_read_ready && !is_uart_read && !is_cordic_read && !is_systolic_read), 
 		.raddr (dmem_read_address),
 		.rdata (dmem_read_data_bram), 
 		.we    (bram_we),
