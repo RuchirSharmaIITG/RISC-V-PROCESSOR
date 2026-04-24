@@ -84,6 +84,9 @@ module top_fpga #(
     wire is_systolic_write= (dmem_write_address[31:28] == 4'h5);
 
     // Convenience aliases used in a few legacy spots below
+    wire is_uart_addr     = is_uart_read  || is_uart_write;
+    wire is_cordic_addr   = is_cordic_read  || is_cordic_write;
+    wire is_systolic_addr = is_systolic_read || is_systolic_write;
    
 
     wire uart_we       = is_uart_write && dmem_write_ready;
