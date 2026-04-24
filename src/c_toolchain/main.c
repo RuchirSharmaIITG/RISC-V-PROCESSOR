@@ -144,6 +144,152 @@ int main() {
 
 
 
+// #include "util.h"
+// #include "workload_alu.h"
+
+// void c_trap_handler(unsigned int cause) { print_string("\r\n[TRAP]\r\n"); }
+
+// int main() {
+//   for (volatile int i = 0; i < 500000; i++)
+//     ;
+//   // Directly print Alphabet to ensure UART is ready
+//   for (char c = 'A'; c <= 'Z'; c++)
+//     print_char(c);
+//   print_char('\r');
+//   print_char('\n');
+//   // Run the Integer & RV32M test suite
+//   run_alu_diagnostic();
+//   print_string("\r\n--- STARTING RV32F FLOATING POINT TESTS ---\r\n");
+//   // Test 1: Basic Addition
+//   float a = 5.25f;
+//   float b = 3.5f;
+//   float res = a + b; // Expected: 8.75
+
+//   print_string("5.25 + 3.50 = ");
+//   unsigned int raw = *((unsigned int *)&res);
+//   if (raw == 0x410C0000) {
+//     print_string("8.75 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 2: Multiplication
+//   res = a * b; // Expected: 18.375
+//   print_string("5.25 * 3.50 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0x41930000) {
+//     print_string("18.375 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+
+//   // Test 3: Division
+//   res = b / 0.5f; // Expected: 7.0
+//   print_string("3.50 / 0.50 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0x40E00000) {
+//     print_string("7.0 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 4: Subtraction
+//   res = a - b; // Expected: 1.75
+//   print_string("5.25 - 3.50 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0x3FE00000) {
+//     print_string("1.75 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 5: Addition with Negatives
+//   res = -3.5f + 1.5f; // Expected: -2.0
+//   print_string("-3.50 + 1.50 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0xC0000000) {
+//     print_string("-2.0 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 6: Multiplication with Negatives
+//   res = 2.5f * -4.0f; // Expected: -10.0
+//   print_string("2.50 * -4.00 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0xC1200000) {
+//     print_string("-10.0 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 7: Division with Negatives
+//   res = -15.0f / -3.0f; // Expected: 5.0
+//   print_string("-15.00 / -3.00 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0x40A00000) {
+//     print_string("5.0 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 8: Float to Integer Casting (Tests FCVT.W.S)
+//   int int_res = (int)8.75f; // Expected: 8
+//   print_string("(int)8.75 = ");
+//   if (int_res == 8) {
+//     print_string("8 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Raw: ");
+//     print_hex((unsigned int)int_res);
+//     print_string(")\r\n");
+//   }
+//   // Test 9: Integer to Float Casting (Tests FCVT.S.W)
+//   res = (float)15; // Expected: 15.0
+//   print_string("(float)15 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0x41700000) {
+//     print_string("15.0 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   // Test 10: Chained Arithmetic
+//   res = (5.0f * 2.0f) - 3.0f; // Expected: 7.0
+//   print_string("(5.0 * 2.0) - 3.0 = ");
+//   raw = *((unsigned int *)&res);
+//   if (raw == 0x40E00000) {
+//     print_string("7.0 [PASSED]\r\n");
+//   } else {
+//     print_string("FAILED (Hex: ");
+//     print_hex(raw);
+//     print_string(")\r\n");
+//   }
+//   print_string("\r\nAll computational modules verified! Processor is fully "
+//                "operational!\r\n");
+//   while (1) {
+//     for (volatile int i = 0; i < 100000; i++)
+//       ; // Halt
+//   }
+
+//   return 0;
+// }
+
+
+
+
+
+
+
+
 
 // #include "util.h"
 // #include <stdint.h>
