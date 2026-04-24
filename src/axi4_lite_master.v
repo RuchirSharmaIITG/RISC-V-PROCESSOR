@@ -4,7 +4,9 @@ module axi4_lite_master (
     input  wire        clk,
     input  wire        reset,
 
-    // CPU Interface
+    // =========================================================================
+    // Core Processor / Pipeline Interface
+    // =========================================================================
     input  wire        req_enable,
     input  wire        req_write,
     input  wire [31:0] req_addr,
@@ -13,7 +15,9 @@ module axi4_lite_master (
     output wire        axi_busy,
     output reg  [31:0] axi_rdata,
 
-    // AXI4-Lite Master Interface
+    // =========================================================================
+    // Standard AXI4-Lite Master Memory-Mapped Interface
+    // =========================================================================
     output reg  [31:0] m_axi_awaddr,
     output wire [2:0]  m_axi_awprot,
     output reg         m_axi_awvalid,
@@ -38,6 +42,7 @@ module axi4_lite_master (
     assign m_axi_awprot = 3'b000;
     assign m_axi_arprot = 3'b000;
 
+    // FSM State Definitions
     localparam STATE_IDLE     = 4'd0;
     localparam STATE_WADDR    = 4'd1;
     localparam STATE_WDATA    = 4'd2;
@@ -53,28 +58,32 @@ module axi4_lite_master (
     reg        last_triggered_write;
     reg        aw_done_int, w_done_int;
 
-    // axi_busy logic: 
-    // High during active transaction states (IDLE thru DONE).
-    // Drops to 0 in STATE_COOLDOWN to allow the pipeline to capture the result.
-    // If a new request arrives while in IDLE, assert busy combinationally to stall the pipeline
-    // before the new memory operation escapes.
+    // =========================================================================
+    // Pipeline Stall / Transaction Status Logic (axi_busy)
+    // -------------------------------------------------------------------------
+    // The busy signal remains asserted throughout active bus transactions 
+    // (STATE_WADDR through STATE_DONE). It is intentionally deasserted during 
+    // STATE_COOLDOWN, permitting the upstream pipeline to latch the final result.
+    // Combinational assertion handles continuous requests during STATE_IDLE, 
+    // preemptively stalling the pipeline to prevent uncaptured memory operations.
+    // =========================================================================
     assign axi_busy = ((state != STATE_IDLE) && (state != STATE_COOLDOWN)) || (state == STATE_IDLE && req_enable);
 
     always @(posedge clk or negedge reset) begin
         if (!reset) begin
-            state         <= STATE_IDLE;
-            m_axi_awaddr  <= 0;
-            m_axi_awvalid <= 0;
-            m_axi_wdata   <= 0;
-            m_axi_wstrb   <= 0;
-            m_axi_wvalid  <= 0;
-            m_axi_bready  <= 0;
-            m_axi_araddr  <= 0;
-            m_axi_arvalid <= 0;
-            m_axi_rready  <= 0;
-            axi_rdata     <= 32'h0;
-            aw_done_int   <= 0;
-            w_done_int    <= 0;
+            state                <= STATE_IDLE;
+            m_axi_awaddr         <= 0;
+            m_axi_awvalid        <= 0;
+            m_axi_wdata          <= 0;
+            m_axi_wstrb          <= 0;
+            m_axi_wvalid         <= 0;
+            m_axi_bready         <= 0;
+            m_axi_araddr         <= 0;
+            m_axi_arvalid        <= 0;
+            m_axi_rready         <= 0;
+            axi_rdata            <= 32'h0;
+            aw_done_int          <= 0;
+            w_done_int           <= 0;
             last_triggered_addr  <= 32'hFFFFFFFF;
             last_triggered_write <= 0;
         end else begin
@@ -144,12 +153,14 @@ module axi4_lite_master (
                 end
 
                 STATE_DONE: begin
-                    // Busy is still 1 here. Pipeline is stalled.
+                    // Transaction synchronized. The busy signal remains asserted 
+                    // to maintain the pipeline stall until the next cycle.
                     state <= STATE_COOLDOWN;
                 end
 
                 STATE_COOLDOWN: begin
-                    // axi_busy is 0 here. Pipeline advances at the end of this cycle.
+                    // Structural cooldown cycle. The busy signal is deasserted,
+                    // allowing the upstream pipeline logic to advance cleanly.
                     state <= STATE_IDLE;
                 end
 
