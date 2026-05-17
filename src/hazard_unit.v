@@ -88,7 +88,7 @@ module hazard_unit (
 
         // --- Control Hazard Logic ---
         if (exception_trigger) begin
-            flush_if = 1'b0; // Comb fetch bypasses flush_if requirement
+            flush_if = 1'b0; 
             flush_id = 1'b1;
             flush_ex = 1'b1;
             stall_if = 1'b0;
