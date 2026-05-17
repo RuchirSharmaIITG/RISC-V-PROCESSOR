@@ -20,7 +20,7 @@ except Exception as e:
     print(f"Error opening serial port: {e}")
     sys.exit(1)
 
-# Step 1: Push Bootloader Image
+# Step 1: Prepare Bootloader Image
 bin_path = "program.bin"
 if not os.path.exists(bin_path):
     print(f"Error: {bin_path} not found! Please build first.")
@@ -31,41 +31,51 @@ padded_size = file_size
 while padded_size % 4 != 0:
     padded_size += 1
 
-print(f"Loading {bin_path} ({file_size} bytes -> Padded: {padded_size} bytes)...")
+print(f"Loaded {bin_path} ({file_size} bytes -> Padded: {padded_size} bytes).")
 
-# Read the actual file first!
 with open(bin_path, 'rb') as f:
     payload = f.read()
 
-# Pad the payload array with zeroes to reach a 4-byte alignment
 padding_bytes = padded_size - file_size
 if padding_bytes > 0:
     payload += (b'\x00' * padding_bytes)
 
+# ==========================================================
+# THE SYNCHRONIZATION FIX
+# ==========================================================
+ser.reset_input_buffer()
+ser.reset_output_buffer()
+
+print("\n" + "="*58)
+print(" READY TO FLASH. PLEASE FOLLOW THESE STEPS:")
+print(" 1. Push Switch 0 (J15) DOWN to hold the CPU in reset.")
+print(" 2. Push Switch 0 (J15) UP to activate the Bootloader.")
+print(" 3. Press ENTER on your keyboard to send the program.")
+print("="*58)
+
+input("Press ENTER to transmit...")
+
+print("\nTransmitting 0xDEADBEEF header...")
 # Write Header (DEADBEEF)
 ser.write(bytes([0xDE, 0xAD, 0xBE, 0xEF]))
 
 # Write Size (Little Endian 32-bit)
 ser.write(struct.pack('<I', padded_size))
 
+print("Transmitting payload...")
 # Write Payload in chunks to prevent FTDI buffer overflow
 chunk_size = 256
 for i in range(0, len(payload), chunk_size):
     chunk = payload[i:i+chunk_size]
     ser.write(chunk)
-    # Wait 5ms between chunks to let the FPGA bootloader catch up
-    time.sleep(0.005)
+    time.sleep(0.005) # 5ms delay per chunk
 
-time.sleep(2.0)            # Give the FPGA 1 full second to finish echoing the file
-# ser.reset_input_buffer()
-
-print("Payload dispatched successfully. Listening to FPGA output...")
+time.sleep(0.5) # Give the FPGA a half-second to finish writing to BRAM
+print("Payload dispatched successfully! Listening to FPGA output...")
 print("==========================================================")
 print("             FPGA VERIFICATION TERMINAL                   ")
 print("==========================================================")
-print("Waiting for test results from FPGA...\n(Press Ctrl+C to exit when finished)")
-
-# ser.reset_input_buffer()
+print("(Press Ctrl+C to exit when finished)\n")
 
 # Step 2: Interactive Terminal + Logger
 def rx_thread():
@@ -82,6 +92,10 @@ def rx_thread():
                     except UnicodeEncodeError:
                         sys.stdout.write(text.encode('ascii', errors='replace').decode('ascii'))
                         sys.stdout.flush()
+                    
+                    # Log raw hex representation for debugging!
+                    hex_str = " ".join([f"{b:02X}" for b in data])
+                    logf.write(f" [HEX: {hex_str}] ")
                     logf.write(text)
                     logf.flush()
             except Exception as e:
